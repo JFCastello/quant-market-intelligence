@@ -1,0 +1,10 @@
+{
+  "split_id": "split_001",
+  "train_start_date": "2018-01-02 00:00:00",
+  "train_end_date": "2021-12-31 00:00:00",
+  "n_train": 1008,
+  "n_validation": 125,
+  "best_iteration": 90,
+  "best_score": 0.08983418769759018,
+  "feature_count": 33
+}

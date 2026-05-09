@@ -1,0 +1,462 @@
+app:
+  name: quant-market-intelligence
+  phase: phase-1
+  environment: local
+
+data:
+  provider: twelve_data
+  interval: 1day
+  universe:
+    - SPY
+    - TLT
+    - GLD
+    - HYG
+  adjusted: false #adjusted: true  #-la justificacion del comentado se encuentra en schemas/daily_bar.py, 
+  output_format: json              #  vaya alla para mas info sobre por que no estamos modelando aun un `adjusted_close` 
+                                   #  explicito dentro del contrato, <sanchez>-
+
+forecast:
+  horizon_days: 5
+  target_name: future_rv_5d
+  regime_target_name: future_regime_5d
+  feature_version: v1
+
+paths:
+  raw_path: data/raw
+  normalized_path: data/normalized
+  features_path: data/features
+  targets_path: data/targets
+  models_path: artifacts/models
+  evaluations_path: artifacts/evaluations
+  reports_path: artifacts/reports
+
+modeling:
+  benchmark_model: garch_11_student_t
+  ml_model: xgboost_regressor
+
+logging:
+  level: INFO
+
+features:
+  feature_version: v1
+  price_column: close
+  annualization_factor: 252
+  drop_warmup_rows: false
+  include_intermediate_columns: false
+
+  returns:
+    enabled: true
+    method: log
+    windows: [1, 5]
+
+  volatility:
+    enabled: true
+    base_return_column: log_ret_1d
+    windows: [5, 10, 20, 60]
+    annualize: true
+
+  intraday_range:
+    enabled: true
+    include_hl_range: true
+    include_co_range: true
+
+  atr:
+    enabled: true
+    window: 14
+    normalize_by: close
+
+  momentum:
+    enabled: true
+    method: log
+    windows: [10]
+
+  moving_averages:
+    enabled: true
+    windows: [5, 20, 60]
+    ratios:
+      - [5, 20]
+      - [20, 60]
+
+  drawdown:
+    enabled: true
+    windows: [20, 60]
+
+  context_market:
+    enabled: false
+    
+context_features:
+  enabled: true
+
+  role_map:
+    equity_proxy: SPY
+    duration_proxy: TLT
+    credit_proxy: HYG
+    real_asset_proxy: GLD
+
+  source_layer: features_v1
+
+  direct_returns:
+    enabled: true
+    method: log
+    windows: [1, 5]
+
+  direct_volatility:
+    enabled: true
+    windows: [20]
+
+  spreads:
+    enabled: true
+    definitions:
+      - name: equity_duration_ret_5d_spread
+        left_role: equity_proxy
+        right_role: duration_proxy
+        source_feature: log_ret_5d
+
+      - name: credit_duration_ret_5d_spread
+        left_role: credit_proxy
+        right_role: duration_proxy
+        source_feature: log_ret_5d
+
+  relative_volatility:
+    enabled: true
+    reference_role: equity_proxy
+    source_feature: vol_20d
+    output_name: rel_vol_20d_vs_equity_proxy
+
+  rolling_correlation:
+    enabled: true
+    reference_role: equity_proxy
+    source_feature: log_ret_1d
+    window: 20
+    output_name: corr_20d_vs_equity_proxy
+    self_reference_policy: nan
+
+  merge_keys:
+    - date
+
+  naming:
+    prefix: ctx
+
+targets:
+  target_version: v1
+
+  continuous_target:
+    name: future_rv_5d
+    enabled: true
+    horizon_days: 5
+    base_return_column: log_ret_1d
+    annualization_factor: 252
+    min_periods: 5
+    window_type: fixed_forward
+    allow_partial_window: false
+
+  classification_target:
+    name: future_regime_5d
+    enabled: true
+    source_continuous_target: future_rv_5d
+    method: quantile_bins
+    labels: [calm, normal, stress]
+    n_classes: 3
+    quantiles: [0.33, 0.66]
+    thresholds_source: train_only
+    lower_bin_inclusive: true
+    upper_bin_inclusive: false
+    allow_missing_source: true
+
+  merge_keys:
+    - instrument_id
+    - date
+
+  source_layer: targets_v1
+
+splits:
+  split_version: v1
+  method: walk_forward_expanding
+
+  date_column: date
+  group_key: instrument_id
+
+  train_years: 4
+  validation_months: 6
+  test_months: 6
+  step_months: 6
+
+  min_train_observations: 756
+  allow_partial_last_fold: false
+  require_validation: true
+
+  regime_thresholds_source: train_only
+  output_format: fold_table
+
+benchmark:
+  benchmark_name: garch_11_student_t
+  benchmark_version: v1
+  enabled: true
+
+  mean_model: zero
+  vol_model: garch
+  p: 1
+  o: 0
+  q: 1
+  distribution: studentst
+
+  input_price_column: close
+  return_type: log
+  return_column_name: ret_1d
+  fit_scale: 100.0
+
+  annualization_factor: 252
+  forecast_horizon_days: 5
+  output_target_name: future_rv_5d
+
+  min_train_points: 252
+  score_roles:
+    - validation
+    - test
+
+  enforce_positive_forecasts: true
+  persist_fit_params: true
+
+benchmark_regime:
+  enabled: true
+
+  forecast_value_column: yhat_future_rv_5d
+  output_regime_column: yhat_future_regime_5d
+
+  target_continuous_column: future_rv_5d
+  target_regime_column: future_regime_5d
+
+  threshold_low_column: threshold_low
+  threshold_high_column: threshold_high
+  threshold_source_column: regime_thresholds_source
+  expected_threshold_source: train_only
+
+  calm_label: calm
+  normal_label: normal
+  stress_label: stress
+
+ml_regressor:
+  enabled: true
+
+  model_name: xgboost_regressor
+  model_version: v1
+
+  feature_source: features_context
+  target_column: future_rv_5d
+  score_roles:
+    - validation
+    - test
+
+  objective: reg:squarederror
+  eval_metric: rmse
+
+  n_estimators: 500
+  learning_rate: 0.05
+  max_depth: 4
+  min_child_weight: 5
+  subsample: 0.8
+  colsample_bytree: 0.8
+  reg_alpha: 0.0
+  reg_lambda: 1.0
+  gamma: 0.0
+
+  random_state: 42
+  tree_method: hist
+  n_jobs: -1
+  early_stopping_rounds: 50
+
+  persist_models: true
+  persist_feature_columns: true
+  allow_native_missing_values: true
+
+evaluation:
+  version: v1
+
+  universe:
+    - SPY
+    - TLT
+    - GLD
+    - HYG
+
+  score_roles:
+    - validation
+    - test
+
+  continuous:
+    target_column: future_rv_5d
+    benchmark_prediction_column: yhat_future_rv_5d
+    ml_prediction_column: yhat_future_rv_5d
+    primary_metric: qlike
+    secondary_metrics:
+      - rmse
+      - mae
+
+  discrete:
+    target_column: future_regime_5d
+    benchmark_prediction_column: yhat_future_regime_5d
+    labels:
+      - calm
+      - normal
+      - stress
+    metrics:
+      - macro_f1
+      - balanced_accuracy
+    compute_confusion_matrix: true
+    compute_brier: false
+    brier_disabled_reason: "Current pipeline has hard regime labels but no validated probability outputs yet."
+
+  comparison:
+    benchmark_model_name: garch_11_student_t
+    ml_model_name: xgboost_regressor
+    require_same_oos_rows: true
+    aggregation_levels:
+      - instrument_id
+      - split_id
+      - dataset_role
+      - model_name
+
+  inputs:
+    targets_dir: data/targets
+    splits_dir: artifacts/evaluations/splits
+    regime_targets_dir: artifacts/evaluations/regime_targets
+    benchmark_forecasts_dir: artifacts/evaluations/benchmark_forecasts
+    benchmark_regimes_dir: artifacts/evaluations/benchmark_regimes
+    ml_forecasts_dir: artifacts/evaluations/ml_forecasts
+
+  outputs:
+    metrics_dir: artifacts/evaluations/model_comparison
+    confusion_matrices_dir: artifacts/evaluations/model_comparison/confusion_matrices
+    reports_dir: artifacts/reports/model_comparison
+
+decision:
+  version: v1
+
+  inputs:
+    metrics_dir: artifacts/evaluations/model_comparison
+    confusion_matrices_dir: artifacts/evaluations/model_comparison/confusion_matrices
+
+  comparison:
+    benchmark_model_name: garch_11_student_t
+    ml_model_name: xgboost_regressor
+    primary_metric: qlike
+    discrete_guardrail_metric: macro_f1
+    secondary_discrete_metric: balanced_accuracy
+
+  aggregation:
+    score_roles:
+      - validation
+      - test
+    aggregate_by:
+      - instrument_id
+      - symbol
+      - model_name
+    require_all_splits_present: true
+
+  promotion_rule:
+    min_relative_qlike_improvement: 0.10
+    max_macro_f1_drop: 0.00
+    max_balanced_accuracy_drop: 0.00
+    require_qlike_win: true
+    require_macro_f1_no_worse: true
+    require_balanced_accuracy_no_worse: true
+
+  calibration:
+    metric_name: brier_score
+    is_available: false
+    unavailable_reason: "Current v1 pipeline has hard regime labels only; no probability outputs are materialized yet."
+    policy_when_unavailable: "mark_as_not_evaluable"
+
+  outputs:
+    decision_dir: artifacts/evaluations/decision
+    summary_dir: artifacts/reports/decision
+
+structural_breaks:
+  version: v1
+
+  inputs:
+    features_dir: data/features
+    targets_dir: data/targets
+
+  signals:
+    return_signal_column: log_ret_1d
+    volatility_signal_column: future_rv_5d
+    use_joint_signal: true
+    joint_signal_columns:
+      - log_ret_1d
+      - future_rv_5d
+
+  method:
+    library: ruptures
+    algorithm: pelt
+    cost_model: rbf
+
+  preprocessing:
+    dropna: true
+    min_required_rows: 252
+    standardize_joint_signal: true
+
+  segmentation:
+    penalty: 8.0
+    min_size: 20
+    jump: 1
+
+  outputs:
+    events_dir: artifacts/evaluations/structural_breaks
+    reports_dir: artifacts/reports/structural_breaks
+
+services_layer:
+  version: v1
+
+  inputs:
+    features_dir: data/features
+    targets_dir: data/targets
+    normalized_bars_dir: data/normalized
+    benchmark_forecasts_dir: artifacts/evaluations/benchmark_forecasts
+    benchmark_regimes_dir: artifacts/evaluations/benchmark_regimes
+    ml_forecasts_dir: artifacts/evaluations/ml_forecasts
+    model_comparison_dir: artifacts/evaluations/model_comparison
+    confusion_matrices_dir: artifacts/evaluations/model_comparison/confusion_matrices
+    decision_dir: artifacts/evaluations/decision
+    structural_breaks_dir: artifacts/evaluations/structural_breaks
+
+  defaults:
+    overview_symbol: SPY
+    latest_break_events_limit: 10
+    preferred_decision_summary_file: all_symbols_decision_summary_v1.parquet
+    preferred_decision_reasons_file: all_symbols_decision_reasons_v1.parquet
+
+  views:
+    overview: true
+    model_comparison: true
+    structural_changes: true
+    run_metadata: true
+
+  contracts:
+    return_pandas_objects: true
+    service_functions_must_not_import_streamlit: true
+    one_source_of_truth: true
+
+dashboard_local:
+  version: v1
+
+  app:
+    title: Quant Market Intelligence
+    layout: wide
+    sidebar_state: expanded
+
+  defaults:
+    symbol: SPY
+    comparison_metric: qlike
+    recent_break_events_limit: 10
+
+  pages:
+    home: true
+    overview: true
+    asset_explorer: true
+    model_comparison: true
+    structural_changes: true
+    run_metadata: true
+
+  contracts:
+    use_services_layer_only: true
+    streamlit_must_not_reimplement_business_logic: true

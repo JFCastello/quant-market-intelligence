@@ -1,0 +1,1036 @@
+# Conexión a repositorios privados de GitHub usando SSH (Notas de laboratorio)
+
+## Contexto
+
+En esta sesión se aprendió a conectarse a un repositorio privado en GitHub desde un entorno de desarrollo local utilizando autenticación mediante claves SSH. 
+Objetivo: poder clonar, modificar y subir cambios a un repositorio privado sin necesidad de usar contraseñas o tokens cada vez.
+Contexto: se trabajó desde un entorno WSL (Windows Subsystem for Linux) ejecutando Ubuntu, lo cual permite usar herramientas de desarrollo de Linux directamente 
+          dentro de Windows.
+
+El flujo general consistió en:
+
+1. Verificar acceso al repositorio.
+2. Generar una clave SSH.
+3. Registrar la clave pública en la cuenta de GitHub.
+4. Probar la autenticación SSH.
+5. Clonar el repositorio privado.
+6. Preparar el repositorio para empezar a trabajar.
+
+---
+
+# Conceptos básicos
+
+## Repositorio
+
+Un repositorio es una carpeta controlada por Git que contiene el código de un proyecto junto con su historial de cambios.
+
+En GitHub existen dos tipos principales:
+
+- Repositorios públicos: cualquiera puede verlos.
+- Repositorios privados: solo usuarios autorizados pueden acceder.
+
+Para poder trabajar con un repositorio privado es necesario tener permiso de acceso.
+
+---
+
+### Roles y permisos en un repositorio
+
+Dentro de un repositorio en GitHub pueden existir distintos niveles de acceso.
+
+Los más comunes son:
+
+#### Owner
+Es el propietario del repositorio o de la organización.
+
+Puede:
+
+- administrar el repositorio
+- añadir o eliminar colaboradores
+- modificar permisos
+- eliminar el repositorio
+
+#### Maintainer
+Tiene permisos amplios para gestionar el proyecto.
+
+Puede:
+
+- revisar pull requests
+- aprobar cambios
+- administrar ramas
+
+#### Collaborator
+Es un usuario invitado a colaborar en un repositorio.
+
+Normalmente puede:
+
+- clonar el repositorio
+- crear ramas
+- hacer commits
+- hacer push
+- abrir pull requests
+
+Este fue el caso en el ejercicio realizado: el acceso al repositorio privado se otorgó mediante invitación como colaborador, recuerde que el tener dicho acceso
+				            es un paso basico, necesaio, y si quiere, lo puede pensar como previo o paso cero.
+
+---
+
+# Problema inicial
+
+El objetivo era clonar un repositorio privado.
+
+Se intentó primero el método SSH:
+
+git clone git@github.com:usuario/repositorio.git
+
+Sin embargo, inicialmente el acceso fue rechazado porque el computador aún no estaba autenticado con GitHub.
+Cloning into 'quant-market-intelligence'...
+The authenticity of host 'github.com (IP)' can't be established.
+ED25519 key fingerprint is SHA256:[...].
+This key is not known by any other names.
+Are you sure you want to continue connecting (yes/no/[fingerprint])? yes
+Warning: Permanently added 'github.com' (ED25519) to the list of known hosts.
+git@github.com: Permission denied (publickey).
+fatal: Could not read from remote repository.
+
+Esto ocurre porque GitHub necesita verificar que el computador que intenta conectarse pertenece a una cuenta autorizada.
+
+---
+
+# Autenticación mediante claves SSH
+
+SSH (Secure Shell) permite autenticar un computador sin usar contraseña cada vez.
+
+Funciona mediante un sistema de dos claves:
+
+- Clave privada
+- Clave pública
+
+La clave privada se queda en el computador y nunca debe compartirse.
+
+La clave pública se registra en GitHub.
+
+Cuando el computador intenta conectarse, GitHub verifica que ambas claves coincidan (GitHub verifica criptográficamente que el cliente posee la clave privada 
+correspondiente a la clave pública registrada).
+
+---
+
+# Generación de la clave SSH
+
+Se generó una clave utilizando el algoritmo moderno ed25519.
+
+Comando utilizado:
+
+ssh-keygen -t ed25519 -C "correo_asociado_a_tu_github"
+
+Durante el proceso se preguntó:
+
+Enter file in which to save the key
+
+Se preciono ´enter´ sin especificar ninguna carpeta, por lo que se aceptó la ruta por defecto:
+
+/home/usuario/.ssh/id_ed25519
+
+Tambien aparecio la pregunta:
+
+Enter passphrase (empty for no passphrase):
+
+de modo que usted decide si poner una frase-"contraseña" o no (para cada vez que Git use la ´key´). En mi caso, se puso.
+
+Una vez se responde lo anterior, esto generó dos archivos:
+
+~/.ssh/id_ed25519  
+(clave privada)
+
+~/.ssh/id_ed25519.pub  
+(clave pública)
+
+La clave privada debe permanecer en el computador.
+
+La clave pública es la que se registra en GitHub.
+
+Nota: tambien se crea con ello una ´key fingerprint´ y su representacion visual por asi decirlo, su ´The key's randomart image´.
+      Aun asi, no se guardan en un archivo como las dos anteriores, porque el fingerprint-huella se puede calcular-recalcular-derivar 
+      apartir de la clave publica.... con por ejemplo:
+	ssh-keygen -lf ~/.ssh/id_ed25519.pub
+      El caso, es que el fingerprint mas que todo lo usan las maquinas, pues, cuando se establecen las conexiones con autenticacion criptografica
+      (no tanto los humanos per se)....... y que si bien la lleve no tiene su propio archivo los fingerprints en general de servidores conocidos, si.
+
+## Archivos creados en el sistema
+~/.ssh/id_ed25519        → clave privada
+~/.ssh/id_ed25519.pub    → clave pública
+~/.ssh/known_hosts       → fingerprints de servidores conocidos
+
+Por ello, una buena practica, antes de crear las claves, es usar el comando
+
+ls -la ~/.ssh
+
+y revisar si ya tienes una clave SSH
+
+## Uso de ssh-agent (opcional)
+
+En caso de que la clave SSH haya sido creada con passphrase, puede resultar incómodo tener que introducirla cada vez que Git utilice la clave para autenticarse.
+
+Para evitar esto se puede utilizar ssh-agent, un programa que mantiene la clave privada cargada en memoria durante la sesión (la sesion de terminal i,e al esta
+finalizar, el programa la olvida y toca volver a hacer el proceso-correr los comandos para recordarselo).
+
+De este modo, la passphrase se introduce una sola vez y luego el sistema reutiliza la clave automáticamente (durante el tiempo que dure esa seccion, si inicia una
+nueva sesion de terminal, toca hacer todo de nuevo pues no la reutilizara automaticamente la passphrase).
+
+1. Iniciar el agente SSH
+
+Primero se inicia el agente con:
+
+eval "$(ssh-agent -s)"
+
+Esto inicia un proceso ssh-agent en la sesión actual de terminal.
+
+
+2. Añadir la clave al agente
+
+Luego se añade la clave privada generada anteriormente:
+
+ssh-add ~/.ssh/id_ed25519
+
+Si la clave tiene passphrase, el sistema la solicitará una sola vez.
+
+Una vez añadida, el agente podrá utilizar la clave automáticamente cuando Git utilice la clave para autenticarse, es decir, cuando se realicen operaciones como:
+git pull
+git push
+git clone
+
+3. Ver claves cargadas en el agente
+
+Para verificar qué claves están cargadas en el agente se puede usar:
+
+ssh-add -l
+
+Esto mostrará el fingerprint de las claves actualmente activas.
+
+4. Observación
+
+En algunos sistemas modernos (Linux, macOS o configuraciones de WSL) ssh-agent puede iniciarse automáticamente al abrir una sesión.
+
+En esos casos solo es necesario ejecutar (el segundo comando):
+
+ssh-add ~/.ssh/id_ed25519
+
+i,e no se necesita ejecutar el primer comando que vimos, que inicia un proceso ssh-agent en la sesión actual de terminal)
+
+---
+
+# Obtención de la clave pública
+
+Para visualizar la clave pública se utilizó:
+
+cat ~/.ssh/id_ed25519.pub
+
+Esto muestra una línea larga que comienza con:
+
+ssh-ed25519
+
+Esta línea completa se copia.
+
+---
+
+# Registro de la clave en GitHub
+
+La clave pública se añadió a la cuenta personal de GitHub siguiendo estos pasos:
+
+1. Ir a Settings.
+2. Abrir la sección SSH and GPG keys.
+3. Seleccionar New SSH key.
+4. Elegir el tipo Authentication Key.
+5. Pegar la clave pública generada.
+
+Esto autoriza al computador a conectarse a la cuenta de GitHub.
+
+---
+
+# Verificación de la conexión
+
+Para comprobar que la autenticación funcionaba se ejecutó:
+
+ssh -T git@github.com
+
+Si la configuración es correcta, GitHub responde con un mensaje indicando que la autenticación fue exitosa, algo como:
+   Hi [inserte nombre_usuario_git]! You've successfully authenticated, but GitHub does not provide shell access.
+
+Esto confirma que el computador está autorizado.
+
+---
+
+# Configuración del repositorio remoto (git remote)
+
+Una vez verificada la autenticación SSH, es necesario definir a qué repositorio remoto se conectará Git.
+
+Cuando se clona un repositorio, Git crea automáticamente una referencia llamada origin, que apunta al repositorio remoto.
+
+Esta referencia se puede consultar con:
+
+git remote -v
+
+Esto mostrará las 'direcciones' asociadas al repositorio remoto para operaciones de lectura (fetch) y escritura (push).
+
+## 🔁 Cambio de protocolo: HTTPS → SSH
+
+En algunos casos, el repositorio puede estar configurado inicialmente con 'direcciones' HTTPS:
+
+https://github.com/usuario/repositorio.git
+
+Para utilizar autenticación mediante SSH, es necesario cambiar la URL del remoto a formato SSH:
+
+git remote set-url origin git@github.com:usuario_owner/repositorio.git
+
+Esto permite que Git utilice las claves SSH configuradas previamente en lugar de credenciales como usuario y contraseña.
+
+⚠️ Observaciones importantes
+	• Este cambio solo afecta el repositorio local (o sea su interaccion en su pc con el repo).
+	• No modifica el repositorio en GitHub.
+	• No otorga permisos adicionales sobre el repositorio.
+	• Solo cambia el método de conexión (protocolo).
+
+---
+
+# Clonado del repositorio
+
+Una vez configurada la autenticación se ejecutó:
+
+git clone git@github.com:organizacion/repositorio.git
+
+El repositorio se descargó correctamente al sistema local.
+
+Se creó una carpeta con el nombre del proyecto.
+
+Dentro del repositorio inicialmente solo se encontró el archivo:
+
+README.md
+
+Esto indica que el repositorio todavía está en una fase inicial.
+
+---
+
+# Navegación dentro del repositorio
+
+Se accedió a la carpeta del proyecto usando:
+
+cd nombre_del_repositorio
+
+y se verificó el contenido con:
+
+ls
+
+---
+
+# Flujo de trabajo esperado
+
+Una vez clonado el repositorio el flujo típico de trabajo en Git consiste en:
+
+1. Una vez clonado el repositorio.
+2. Crear una rama nueva.
+3. Realizar cambios en el código.
+4. Registrar los cambios con commits.
+5. Enviar los cambios al repositorio remoto.
+
+Ejemplo de comandos:
+
+git checkout -b nueva_rama
+
+git add .
+
+git commit -m "mensaje del cambio"
+
+git push origin nueva_rama
+
+---
+
+# Observaciones importantes
+
+1. La clave privada nunca debe compartirse.
+2. La autenticación SSH evita tener que introducir credenciales cada vez.
+3. Los repositorios privados requieren permisos explícitos.
+4. El acceso se concede normalmente mediante invitación como colaborador.
+
+---
+
+# Conclusión
+
+En esta sesión se logró configurar correctamente la autenticación SSH entre el computador local y GitHub (la autenticación criptográfica completa entre tu máquina y 
+GitHub), permitiendo trabajar con repositorios privados de manera segura al duplicar estos pasos para otros repos.
+
+El proceso incluyó:
+
+- de antemano revisar que si se tenga acceso al repositorio privado (habiendo sido invitado o por otro medio.... sinole toca pedir acceso o idk)
+- generación de claves SSH
+- registro de la clave pública en GitHub
+- verificación de autenticación
+- clonado exitoso del repositorio
+
+Este procedimiento es el método estándar utilizado por desarrolladores para trabajar con repositorios privados de forma segura y eficiente.
+
+---
+
+# Apendice
+
+## Gestión de múltiples claves SSH y diagnóstico de autenticación
+
+1. ¿Cuando se genera-crea una clave SSH?
+
+¿Se genera una clave SSH por repositorio?
+  
+No.
+
+Las claves SSH no se generan por repositorio, sino 
+- por máquina o 
+- por contexto de uso (mas adelante se profundizara).
+
+Por lo que una sola clave SSH puede utilizarse para acceder a múltiples repositorios siempre que la cuenta tenga permisos sobre ellos
+(una sola maquina, digamos pc, puede acceder a multiples repos siempre que la cuenta git tenga permiso en estos, por ejm).
+
+El control de acceso funciona de la siguiente manera:
+	1.	El computador intenta autenticarse usando una clave SSH.
+	2.	El servidor verifica si esa clave pública está registrada en una cuenta.
+	3.	Si la clave corresponde a una cuenta válida, el sistema verifica si esa cuenta tiene permisos sobre el repositorio solicitado.
+
+Por lo tanto, la autenticación ocurre a nivel de cuenta, no a nivel de repositorio.
+
+
+2. Profundizacion en: cuándo se crea una clave SSH
+
+Las situaciones más comunes son las siguientes.
+
+2.1. Una clave por máquina (caso más común)
+
+Cada computador genera su propia clave.
+
+Ejemplo:
+
+- Laptop personal
+- Servidor de trabajo
+- Computador del laboratorio
+
+Cada uno genera su clave y se registra en la cuenta correspondiente de GitHub (en el fondo, porque la idea o parte del proceso es autenticar dispositivos con 
+acceso a cosas, en nuestro caso particular, a repos).
+
+De modo que esto permite revocar el acceso de un dispositivo específico si es necesario (por ejm si se roban tu pc, para salvaguardar lo del repo privado, simplemente 
+vas a tu cuenta de Git Hub y borras la clave asociada a ese dispositivo).
+
+2.2. Una clave por contexto
+
+Además del caso de una clave por máquina, también es común generar múltiples claves dentro de una misma máquina, cada una asociada a un contexto distinto.
+
+Un “contexto” se refiere a un entorno lógico de uso, por ejemplo:
+	• cuenta personal
+	• cuenta de trabajo
+	• acceso a servidores o clusters
+	• distintos servicios (GitHub, GitLab, etc.)
+
+i,e note que esto es común (multiples claves en una misma maquina) cuando se utilizan múltiples cuentas o infraestructuras distintas (usualmente eso es lo que
+lleva de un contexto a otro)..... -conectando con infraestructuras distintas maybe es mejor decir no? idk-
+
+En este caso, una misma máquina puede tener varias claves SSH almacenadas
+
+Ejemplo:
+id_ed25519_personal   ->  clave personal
+id_ed25519_work       ->  clave de trabajo
+id_ed25519_cluster    ->  clave para servidores/cluster
+
+Donde cada una de estas claves se registra en el servicio correspondiente (por ejemplo en GitHub o GitLab).... se asi pues necesario no solo autenticar dispositivos
+como se mencona en la subseccion anterior, sino tambien autenticar contextos-entornos-entornos logicos)
+
+¿Por qué hacer esto?
+
+Separar claves por contexto permite:
+	• aislar accesos (personal vs trabajo)
+	• mejorar la seguridad (si una clave se compromete, no afecta todo)
+	• mantener orden en entornos con múltiples servicios o servidores
+
+ademas piense que no siempre es una eleccion, por ejm si la cuenta que tiene permisos en un repo es la de su trabajo y no la suya personal (por obvios motivos), se 
+entiende que le va tocar tener dos claves xD (notese como este ejemplo guarda profunda relacion con los 3 puntos anteriores).
+
+Entendido esto, veamos ejemplos o casos tipicos en que se puede generar mas de una clave en un maquina i,e ejemplos de diferentes contextos-entornos-entornos logicos
+
+* Caso típico 1: múltiples cuentas en GitHub
+
+Ejemplo:
+	• cuenta personal → clave personal
+	• cuenta empresa  → clave trabajo
+
+Ambas claves viven en el mismo computador.
+
+Problema:
+Cuando se intenta conectar, el cliente SSH tiene varias claves disponibles en su maquina y no sabe cuál usar automáticamente.
+Esto puede provocar errores de autenticación, incluso si ambas claves son válidas.
+(en la seguintes secciones, en 3. y 4., se profundiza mas en esto)
+
+* Caso típico 2: múltiples servicios (GitHub, GitLab, etc.)
+
+Ejemplo:
+	• GitHub → una clave
+	• GitLab → otra clave
+
+Aunque ambos usan SSH, son servidores distintos, y cada uno tiene registradas claves diferentes.
+
+* Caso típico 3: acceso a servidores o clusters
+
+Ejemplo:
+	• cluster de la universidad
+	• servidor remoto (VPS)
+	• máquina de procesamiento de datos
+
+En este caso:
+	• tú generas una clave en tu máquina
+	• subes la clave pública al servidor
+
+De modo que cada servidor puede tener su propia clave autorizada (no es obligatorio, pero si es buena practica crear una clave pa cada servidor y no usar una pa
+todos xD, que igual se puede, pues al final del dia la privada esta en su maquina y pues usted le puede pasar una misma publica a todos, pero eso es mala practica,
+pues, piense que no esta aislando entornos..... si se infecta un server piense que puso en peligro a todos xD, o mas dummy, si quitas la llave de tu Git Hub, 
+entonces quitas el acceso a todos :o, gpt dice que ese ultimo ejm suena raro, a mi me suena bien, pero bueno, fomalmente, si reutilizas la misma clave en múltiples 
+servicios o servidores, al comprometerse o revocarse esa clave, todos los accesos asociados se ven afectados simultáneamente....... entonces szs 
+por seguridad, control de accesos y organizacion es mejor una por servidor o cosa).
+
+Esto no significa que el servidor genere la clave, sino que autoriza claves externas (pues al final del dia solo tiene la publica y serviria como paso
+intermedio.... si quiere, lo piensa como que usted tiene la clave privada y el servidor tiene un cerradura publica).
+
+Nota (darle la clave publica a un servidor):
+Para hacer esto, hay dos opciones, una manual y otro con un comando.
+
+Comando
+ssh-copy-id usuario@servidor
+
+o manualmente pegándola en:
+~/.ssh/authorized_keys
+
+del servidor.
+
+Realizado eso entonces cuando te conectas
+
+ssh usuario@servidor
+
+pasa esto:
+	1. Tu máquina usa la clave privada
+	2. El servidor usa la clave pública guardada
+	3. Hace verificación criptográfica
+	4. Si coinciden → acceso permitido
+
+asi es como autentica el servidor..... cabe notar que, por si aún no se ha dado cuenta, un mismo servidor puede almacenar múltiples claves públicas en el archivo:
+~/.ssh/authorized_keys
+
+Esto permite que varios usuarios o dispositivos distintos se autentiquen contra el mismo servidor sin compartir claves privadas.
+
+
+3. Dónde se guardan las claves (donde se genera el "problema central" en todo esto)
+
+Como vimos anteriormente, por defecto (cuando no especificamos), las claves SSH se almacenan normalmente en el directorio:
+
+~/.ssh/
+
+Ejemplo:
+
+~/.ssh/id_ed25519
+~/.ssh/id_ed25519_work
+~/.ssh/id_rsa
+
+Por lo que es posible que una máquina tenga varias claves simultáneamente en el mismo directorio, de modo que alli es donde nace el problema pues aunque todas las
+claves puden ser validas o buenas para una u otra cosa, SSH no sabe diferenciar cual es la pertinente al caso, la que se solicita (en el siguiente punto, 4., se 
+profundizara mas en ello). 
+
+Aunque, como vimos anteriormente, es posible especificar donde uno quiere guardarlas i,e es posible guardar las llaves en directorios especificos y no tener varias en 
+un solo lado, 
+
+~/keys/id_ed25519_work
+
+esto no soluciona el problema, porque SSH no la va usar automaticamente i,e SSH solo busca llaves automaticamente-por defecto en ciertos directorios especificos y 
+nada mas (como es el ~/.ssh/) i,e mover las claves a diferentes directorios no resuelve el problema por sí mismo, ya que SSH no indexa ni descubre claves fuera de sus 
+rutas conocidas..... por ello, hay varias opciones de lo que podemos-toca hacer, pero en todas ellas, en algun u otro sentido toca decirle o le estamos
+diciendo a SSH donde esta la llave que queremos usar, por lo que quedamos en las mismas casi que en el caso donde tenemos varias en la carpeta por defecto (en el 
+siguiente punto, 4., se profundiza que opciones tenemos-que hacer).
+
+
+4. Cómo decide SSH qué clave usar
+
+Cuando se establece una conexión SSH, el cliente intenta autenticarse utilizando las claves disponibles.
+
+Estas claves (las que por defecto o automaticamente SSH va mirar) pueden provenir de:
+	• el directorio por defecto (~/.ssh/)
+	• el agente SSH (ssh-agent)
+
+Si existen múltiples claves, SSH puede intentar utilizarlas una por una hasta encontrar una que sea aceptada por 
+el servidor.
+
+Esto puede generar problemas si:
+	• la clave correcta no se intenta primero
+	• el servidor limita el número de intentos de autenticación (por ejemplo GitHub lo hace)
+
+En estos casos la conexión puede fallar incluso si la clave correcta existe (y se agotan por ejm intentos, o cualquier otra cosa), pues SSH no tiene contexto 
+suficiente para decidir-seleccionar-inferir automáticamente qué clave usar en cada conexión-destino de conexion (la clave adecuada.... pues SSH no posee información 
+semántica sobre la intención del usuario (por ejemplo, ‘usar la cuenta de trabajo’), por lo que no puede inferir automáticamente qué clave corresponde a cada 
+conexión) y SSH simplemente intenta 
+automáticamente las claves disponibles en sus rutas por defecto (como ~/.ssh/) y aquellas cargadas en ssh-agent, siguiendo un orden interno que no siempre coincide 
+con la intención del usuario (de modo que su el servidor limita el número de intentos de autenticación (por ejemplo, mediante MaxAuthTries), se sigue que SSH no 
+alcanza a probar todas las claves disponibles y queda out).
+
+Ahora bien, cuando las claves que usted quiere usar se guardan en una carpeta que no es la de por defecto, SSH por defecto no las va mirar (como dijimos previamente
+SSH intenta automáticamente las claves disponibles en las rutas por defecto (como ~/.ssh/) y aquellas cargadas en ssh-agent. Las claves ubicadas en otras rutas no se 
+consideran i,e el cliente SSH no las utilizará automáticamente, a menos que se indiquen explícitamente, por lo que es necesario especificarlas manualmente), 
+por lo que tenes 3 opciones:
+
+* Opción 1 — Usar config (la mejor, se profundiza en la sgiueinte seccion, la 5.)
+
+Host github-work
+    HostName github.com
+    User git
+    IdentityFile ~/keys/id_ed25519_work
+
+* Opción 2 — Especificar manualmente (tambien funciona para cuando hay varias llaves en una carpeta)
+
+ssh -i ~/keys/id_ed25519_work usuario@servidor
+
+o con git:
+
+GIT_SSH_COMMAND='ssh -i ~/keys/id_ed25519_work' git clone ...
+
+* Opción 3 — Moverla a ~/.ssh/
+
+Simplemente:
+mv ~/keys/id_ed25519_work ~/.ssh/
+
+y si alli hay otras, hacerle igual el config o especificacion manual o etc (a continuacion, en la 5., profundizamos precisamente en ello)
+
+En resumen:
+El problema central no es que existan múltiples claves (o incluso donde estan), sino que el cliente SSH no tiene una regla explícita que le indique cuál debe usar 
+para cada destino de conexión (host). Por ello, herramientas como ~/.ssh/config permiten definir ese mapeo de forma determinista.
+
+5. Uso del archivo ~/.ssh/config
+
+Bajo la situcion anteriormente planteada es que entra a jugar el archivo:
+
+~/.ssh/config
+
+permite especificar qué clave debe utilizarse para cada conexión (recuerde que SSH selecciona claves en función del host, HostName, no del repositorio ni del usuario 
+lógico dentro de Git).
+
+Ejemplo:
+
+Host github-personal
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/id_ed25519_personal
+
+Host github-work
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/id_ed25519_work
+
+Esto crea alias de conexión que permiten controlar explícitamente qué clave se utiliza.
+
+Ejemplo de uso:
+
+git clone git@github-work:empresa/repositorio.git
+
+Cuándo es necesario usar ~/.ssh/config
+
+Situación                          Necesidad de configuración
+Una sola clave en la máquina       normalmente no es necesario
+Varias claves en la máquina        puede ser recomendable
+Varias cuentas de GitHub           normalmente necesario (pues da pie a que en una maquina suya hayan keys de diferentes cuentas)
+Acceso a múltiples servidores      recomendable (analogo al anterior)
+
+En resumen: piense que Git sabe identificar cuando hay diferentes keys en una cuenta de Git Hub y sabe escoger en ese paso del proceso cual, lo que no sabe identificar
+(aunque en realidad en este paso el que mira eso es el cliente SSH... aunque obvio, eso esta implmentado en Git, el llamado de Git a SSH)
+es cuando hay diferentes keys en una maquina pues no sabe cual debe usar (o si estan en lugares que SSH no mira por defecto i,e fuera de la carpeta por defecto o si
+no esta en el agente SSH), ahi es cuando se hace necesario hacer el ~/.ssh/config, para decirle cual usar segun cual
+escenario.... cabe notar, por esto, que si usted crea un agente SSH y a este le asocia la key correcta, esto le permitiria en algun sentido no tener que hacer
+el ~/.ssh/config, pero entonces mire que esta opcion es mas manual por asi decirlo.
+
+--- Seccion, diagnostico de autenticacion: ver qué clave SSH está usando realmente la conexión
+
+Cuando existen problemas de autenticación es posible inspeccionar el proceso utilizando el modo de depuración de SSH.
+
+Comando:
+ssh -vT git@github.com
+La opción -v activa el modo verbose, que muestra información detallada del proceso de autenticación.
+
+La salida mostrará líneas como:
+
+Offering public key: /home/usuario/.ssh/id_ed25519
+Offering public key: /home/usuario/.ssh/id_rsa
+
+Esto permite observar:
+	• qué claves intenta usar el cliente
+	• en qué orden se prueban
+	• cuál es finalmente aceptada por el servidor
+
+Este comando es una herramienta útil para diagnosticar problemas de autenticación SSH.
+
+Si ninguna clave es aceptada, se observarán mensajes como 
+
+Permission denied (publickey), 
+
+lo cual indica que ninguna de las claves ofrecidas coincide con las autorizadas en el servidor (recuerde el paso cero para el caso de repos de GitHub del que 
+hablabamos)
+
+### Forzar el uso de una clave específica
+
+En algunos casos, puede ser necesario indicar explícitamente qué clave SSH debe utilizarse durante la conexión (por ejemplo en entornos donde existen múltiples claves 
+SSH, puede ser necesario indicar explícitamente cuál utilizar).
+
+Esto se puede hacer con el siguiente comando:
+
+ssh -T -i ~/.ssh/id_ed25519 git@github.com
+
+Este comando fuerza al cliente SSH a utilizar únicamente la clave especificada, sin intentar otras claves disponibles en el sistema.
+
+### Diagnóstico avanzado con control de identidad - selección explícita de clave
+
+Para obtener un diagnóstico más preciso, información más detallada del proceso y evitar que SSH pruebe múltiples claves automáticamente, se puede combinar el modo 
+verbose con la selección explícita de clave:
+
+ssh -v -o "IdentitiesOnly=yes" -i ~/.ssh/id_ed25519 git@github.com
+
+Este comando:
+	• activa el modo verbose (-v)
+	• fuerza-utiliza únicamente la clave especificada (-i)
+	• evita que SSH pruebe otras claves disponibles automáticamente (IdentitiesOnly=yes)
+
+Esto permite verificar de forma determinista qué ocurre durante el proceso de autenticación.
+
+🧠 Interpretación
+
+Si con este comando:
+	• la autenticación funciona               → el problema era selección de clave
+	• falla con Permission denied (publickey) → la clave no está autorizada
+	• responde con otro usuario               → la clave pertenece a otra cuenta
+
+### Autenticación vs permisos
+
+Incluso si la autenticación SSH es exitosa, es posible que el acceso al repositorio falle.
+
+Esto ocurre porque autenticación y permisos son procesos distintos e independientes.
+
+🔐 Autenticación (SSH → identidad)
+
+SSH se encarga de verificar quién eres.
+
+Si la clave no es válida o no está registrada, se obtiene un error como:
+
+Permission denied (publickey)
+
+Esto significa que el servidor no pudo autenticar tu identidad.
+Es decir, no sabe quién eres, por lo que la conexión es rechazada antes de cualquier otra validación.
+
+ocurre cuando:
+	• no has añadido la clave pública a tu cuenta de GitHub
+	• estás usando otra clave distinta
+	• la clave no coincide
+
+🔓 Autorización (GitHub → permisos)
+
+Si la autenticación es exitosa, GitHub ya sabe quién eres (recuerde que usted puede verificar eso corriendo ssh -T git@github.com cuando sale algo tipo "Hi usuario!".
+Por lo que a partir de ese punto, lo que toca, es verificar si tu cuenta tiene permisos sobre el repositorio.
+
+Si no los tienes, puede responder con:
+
+Repository not found
+
+Esto no siempre significa que el repositorio no exista.
+
+Puede indicar que:
+	• la cuenta autenticada no tiene permisos sobre el repositorio
+	• la invitación como colaborador no ha sido aceptada
+	• se está autenticando con una cuenta distinta a la esperada
+
+i,e suele pasar cuando tenes la clave publica en tu cuenta GitHub, por lo que el SSH con tu maquina sale positivo-bien, pero no estas añadido con permisos sobre
+el repositorio (que es lo mismo que la ceunta es distita a las esperadas) o no existe o no has aceptado
+
+🧠 Interpretación correcta
+
+Estos errores corresponden a fallos en etapas diferentes:
+	• Permission denied (publickey) → falla en autenticación (identidad)
+	• Repository not found          → falla en autorización (permisos)
+
+🧪 Verificación práctica
+
+Para comprobar si el problema es de permisos se puede usar:
+
+git ls-remote origin
+
+Si este comando falla con el mismo error (Repository not found), entonces:
+
+👉 la autenticación ya fue exitosa, pero no tienes acceso al repositorio
+   caso contrario, si sale Permission denied (publickey)
+   la autenticacion sigue sin ser exitosa (sigues embolatado en lo de las llaves, en elegir la correcta, o en ponerlas en el perfil de GitHub o algo del SSH)
+
+
+🏢 Analogía
+	• SSH es la portería del edificio
+	• El repositorio es un apartamento
+
+Casos:
+	• Permission denied (publickey)
+	   → no tienes identificación válida
+	   → no puedes entrar al edificio
+
+	• Repository not found
+	   → sí entraste al edificio
+	   → pero no tienes acceso a ese apartamento
+
+🏁 Regla clave
+
+👉 Primero se valida la identidad (SSH).
+👉 Luego se validan los permisos (GitHub).
+
+
+
+Observación final
+
+En configuraciones simples (una máquina y una única clave SSH) no suele ser necesario realizar configuraciones adicionales.
+
+Sin embargo, en entornos con múltiples claves, cuentas o servidores, el uso de herramientas como:
+	• ssh-agent
+	• ~/.ssh/config
+	• modo verbose (ssh -v)
+
+permite controlar de forma precisa el proceso de autenticación y evitar errores difíciles de diagnosticar.
+
+* Big Picture (en post de una mejor comprension de lo que se esta haciendo-donde estamos parados):
+
+En lo que se ha narrado hasta ahora nos hemos quedado en cosas particulares, en realizacion de procesos y logrado de cosas puntuales, aun asi, la imagen de una
+figura-pintura-escenario general se entre asomo constantemente en las diferentes cosas que ibamos mencionando. 
+
+Y todo parte o puede partir digamos con la siguiente afirmacion:
+"Git no decide qué clave usar ni implementa la lógica de autenticación SSH.
+ Cuando se utiliza una URL SSH, Git delega completamente el proceso al cliente SSH (lo llama-invoca), el cual intenta autenticarse con las claves disponibles.
+ Por tanto, cualquier problema relacionado con la selección de claves pertenece al comportamiento del cliente SSH, no de Git."
+
+En otras palabras 
+- por un lado tenemos a Git 
+- y por otro lado tenemos a SSH, 
+- y la cosa entre estos dos, es que cuando Git necesita realizar un proceso (aun no sabemos bien cual), para realizarlo, llama a SSH
+
++ ¿Que proceso es el que lleva a cabo SSH?
+SSH es, en esencia, un mecanismo para:
+
+👉 establecer una conexión segura y autenticada entre dos máquinas (o hosts, un host es simplemente: una máquina en la red con la que te puedes comunicar
+								    Un host puede ser:
+								     • un servidor (ej: GitHub)
+								     • tu propio computador
+								     • otra máquina en una red
+								     • incluso una IP específica
+								    
+								    👉 si tiene una dirección y responde en red → es un host
+								       ejemplos: github.com        ← host (nombre)
+										 192.168.1.1       ← host (IP)
+										 mi-servidor.local ← host                                                 )
+
+Piense que hay dos lados:
+	• su máquina (cliente)
+	• el servidor (por ejemplo GitHub-su servidor o un servidor remoto)
+
+y que usted quiere comunicar-conectar a esas dos maquina
+
+🔄 Proceso simplificado (para alguien que no sabe nada)
+Tu máquina ─────────────▶ Servidor
+(cliente)                 (remoto)
+
+Ahora, lo que SSH hace es:
+1. Tu máquina dice: "quiero conectarme"
+2. El servidor responde: "demuéstrame quién eres"
+3. Tu máquina usa una clave privada
+4. El servidor verifica con la clave pública
+5. Si coinciden → acceso permitido
+
+🔑 Idea clave (muy importante)
+	• Tú tienes una clave privada (secreta, nunca se comparte)
+	• El servidor tiene tu clave pública
+
+👉 SSH usa criptografía para verificar que tú eres quien dices ser, sin enviar la clave privada
+   ¿como? 
+
+TU MÁQUINA (cliente)                         SERVIDOR
+---------------------                        ---------------------
+Tiene:                                      Tiene:
+- una o varias claves privadas 🔒            - tu(s) clave(s) pública(s) 🔓
+
+        │
+        │ 1. "Hola, quiero conectarme"
+        ├──────────────────────────────────────────────▶
+        │
+        │                                2. "Ok, pruébalo".... 
+	│				 Genera un reto aleatorio 🎲
+        │                                -> ejemplo: "X7kP9#Lm2!"
+        │
+        │                                "Ok, para ello, firma esto"
+        │◀──────────────────────────────────────────────
+        │
+        │ 3. SSH dice: "voy a intentar con mis claves..."
+        │    	Busca claves en tu máquina (~/.ssh/, ssh-agent, etc.), luego prueba siguiendo un orden interno de modo que digamos queda:
+        │   ┌──────────────────────────────┐
+        │   │ prueba clave 1 🔑            │
+        │   │ prueba clave 2 🔑            │
+        │   │ prueba clave 3 🔑            │
+        │   └──────────────────────────────┘
+	│   Asi, digamos, por ejm, (con cada clave pasa esto):
+        │
+        │   - firma un mensaje con la privada ✍️
+        │   ┌──────────────────────────────────────────────┐
+        │   │ prueba clave 1 🔑                            │
+        │   │                                              │
+        │   │ firma1 = f(reto, privada1) ✍️                │
+        │   │                                              │
+        │   │ envía (reto + firma1)                        │
+        │   └──────────────────────────────────────────────┘
+        │
+        ├──────────────────────────────────────────────▶
+        │
+        │                                4. Verificación 🔍
+	│				 - verifica con la pública 🔍
+        │                                - ¿coincide?
+        │				 
+        │                                ¿verify(reto, firma1, publica1)? -> funcion que verifica: para dado un reto 
+	│					                             si la firma pudo haber sido generada por la clave privada asociada a esta clave pública
+	│								     i,e si la firma es valida para ese reto via uso de la publica
+        │
+        │                                └── NO ❌ → "siguiente clave"
+        │◀──────────────────────────────────────────────
+        │
+        │   ┌──────────────────────────────────────────────┐
+        │   │ prueba clave 2 🔑                            │
+        │   │                                              │
+        │   │ firma2 = f(reto, privada2) ✍️                │
+        │   │                                              │
+        │   │ envía (reto + firma2)                        │
+        │   └──────────────────────────────────────────────┘
+        │
+        ├──────────────────────────────────────────────▶
+        │
+        │                                ¿verify(reto, firma2, publica2)?
+        │
+        │                                ├── SÍ ✅ → acceso concedido 🎉
+        │                                └── NO ❌ → sigue intentando
+        │◀──────────────────────────────────────────────
+        │
+        │ 5. Resultado final:
+        │
+        │    - si alguna firma es válida → entra ✅
+        │    - si ninguna sirve          → falla ❌
+	│
+	│   Asi propone SSH el proceso de verificacion de un par de llaves privadas publicas sin necesidad de dar la privada
+
+⚙️ ¿Qué hace SSH internamente?
+
+Cuando intentas conectarte, SSH:
+	1. Busca claves en tu máquina (~/.ssh/, ssh-agent, etc.),
+	2. Intenta autenticarse con ellas
+	3. Las prueba una por una
+	4. Se detiene cuando:
+		• una funciona ✅
+		• o todas fallan ❌
+
+👉 SSH no “elige inteligentemente”, solo prueba
+
+Es pues de esta manera que si Git necesita hacer algo (clonar, hacer push, etc.) → entonces llama a SSH para que establezca la conexión segura
+entre su maquina y el servidor remoto (y que finalmente usted vea los cambios-acciones-cosas reflejadas en su cuenta de GitHub en x repo).... hablemos un poco mas de 
+esto
+
++ Ahora si, conectado cabos, entonces ¿Que podemos decir de SSH aplicado a Git?
+Conectando todo:
+
+Cuando haces algo como:
+git clone git@github.com:usuario/repositorio.git
+
+lo que realmente pasa es:
+Git ─────▶ SSH ─────▶ Servidor
+        (auth)       (verifica)
+
+Más detallado:
+1. Git quiere el repositorio
+2. Git llama a SSH
+3. SSH intenta autenticarse (con tus claves)
+4. El servidor valida la clave
+5. Si todo está bien → Git recibe el repo
+
+💥 Entonces, ¿qué estaba pasando en todo lo anterior?
+
+Todos los problemas que se discutieron (múltiples claves, errores de autenticación, necesidad de config, etc.) se explican porque:
+
+👉 SSH no tiene contexto sobre lo que tú quieres hacer
+
+SSH no sabe:
+	• si es cuenta personal o de trabajo
+	• qué repositorio estás usando
+	• qué clave “debería” usar
+
+Solo sabe:
+
+👉 “tengo estas claves… voy a probarlas”
+
+⚠️ Pero hay otra capa (igual de importante)
+
+👉 Autenticación ≠ Autorización -(el paso cero)-
+
+Aunque SSH logre autenticarse correctamente (o sea, demostrar quién eres):
+
+👉 eso NO significa que tengas permiso
+
+El servidor también verifica:
+	• si tu clave pública está registrada
+	• si esa identidad tiene acceso al repo
+	• si eres colaborador / tienes permisos
+
+⚠️ Consecuencia directa
+
+Por eso:
+	• puede usar la clave incorrecta
+	• puede no llegar a probar la correcta
+	• puede fallar aunque todo esté bien configurado
+
+Y además:
+	• puede autenticarse bien ✅ pero igual fallar ❌
+	• puede decir cosas como:
+
+Permission denied
+Repository not found
+
+👉 no porque la clave esté mal, sino porque no tienes acceso
+
+
+🧩 ¿Qué hacen entonces las soluciones?
+
+Todo lo que viste (config, agent, etc.) hace lo mismo:
+
+👉 darle contexto explícito a SSH (autenticación)
+
+Ejemplo:
+	• ~/.ssh/config → “para este host usa esta clave”
+	• ssh-agent → “estas son las claves disponibles”
+	• -i → “usa esta y ya”
+
+Pero ojo:
+
+👉 eso solo resuelve quién eres
+
+🔐 ¿Y los permisos entonces?
+
+Eso ya es otra capa:
+
+👉 autorización (lado del servidor)
+
+Ejemplos:
+	• agregar tu clave pública a la cuenta
+	• darte acceso como colaborador
+	• permisos de lectura/escritura
+
+🏁 Conclusión (la que amarra todo)
+
+👉
+No estás configurando Git.
+Estás controlando cómo SSH maneja la identidad en una conexión segura.
+
+Pero además:
+
+👉
+El acceso final depende de dos cosas:
+	1. Autenticación → demostrar quién eres (SSH)
+	2. Autorización → si puedes hacer lo que quieres (servidor)
+
+
