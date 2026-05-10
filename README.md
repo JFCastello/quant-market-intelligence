@@ -2,6 +2,8 @@
 
 Daily market analytics platform for regime detection, volatility forecasting, benchmark-vs-ML comparison, and structural break visualization.
 
+**Live dashboard:** https://quant-market-intelligence-3n4czzbmerzajpqzhabs2h.streamlit.app/
+
 ## Overview
 
 Quant Market Intelligence is a local-first analytics product for daily market data. Its first operational question is deliberately narrow and testable:
